@@ -8,7 +8,7 @@ python train.py \
 
 python baking.py \
 -m outputs/bicycle/ \
---checkpoint outputs/bicycle/chkpnt3000.pth \
+--checkpoint outputs/bicycle/chkpnt8000.pth \
 --bound 16.0 \
 --occlu_res 64 \
 --occlusion 0.1

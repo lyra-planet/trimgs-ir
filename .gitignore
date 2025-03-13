@@ -23,6 +23,7 @@ datasets_local
 __pycache__/
 *.py[cod]
 *$py.class
+
 submodules/nvdiffrast
 # 忽略虚拟环境
 env/
