@@ -17,10 +17,9 @@ from arguments import GroupParams, ModelParams, OptimizationParams, PipelinePara
 from gaussian_renderer import render
 from gs_ir import recon_occlusion, IrradianceVolumes
 from pbr import CubemapLight, get_brdf_lut, pbr_shading
-from scene import GaussianModel, Scene, Camera,FlattenGaussianModel
+from scene import GaussianModel, Scene, Camera, FlattenGaussianModel
 from utils.general_utils import safe_state
 from utils.image_utils import psnr, turbo_cmap
-from utils.image_utils import psnr, blur, generate_grid, compute_gradient
 from utils.loss_utils import l1_loss, ssim
 
 try:
@@ -29,109 +28,6 @@ try:
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
-
-def culling(xyz, cams, expansion=2):
-    cam_centers = torch.stack([c.camera_center for c in cams], 0).to(xyz.device)
-    span_x = cam_centers[:, 0].max() - cam_centers[:, 0].min()
-    span_y = cam_centers[:, 1].max() - cam_centers[:, 1].min() # smallest span
-    span_z = cam_centers[:, 2].max() - cam_centers[:, 2].min()
-
-    scene_center = cam_centers.mean(0)
-
-    span_x = span_x * expansion
-    span_y = span_y * expansion
-    span_z = span_z * expansion
-
-    x_min = scene_center[0] - span_x / 2
-    x_max = scene_center[0] + span_x / 2
-
-    y_min = scene_center[1] - span_y / 2
-    y_max = scene_center[1] + span_y / 2
-
-    z_min = scene_center[2] - span_x / 2
-    z_max = scene_center[2] + span_x / 2
-
-
-    valid_mask = (xyz[:, 0] > x_min) & (xyz[:, 0] < x_max) & \
-                 (xyz[:, 1] > y_min) & (xyz[:, 1] < y_max) & \
-                 (xyz[:, 2] > z_min) & (xyz[:, 2] < z_max)
-    # print(f'scene mask ratio {valid_mask.sum().item() / valid_mask.shape[0]}')
-
-    return valid_mask, scene_center
-
-def normal_regularization(viewpoint_cam, gaussians, pipe, bg, visibility_filter, depth_grad_thresh=-1.0, close_thresh=1.0, dilation=2, depth_grad_mask_dilation=0):
-    pos3D = gaussians.get_xyz
-    pos3D = torch.cat((pos3D, torch.ones_like(pos3D[:, :1])), dim=1) @ viewpoint_cam.world_view_transform
-    gs_camera_z = pos3D[:, 2:3]
-    depth_map = render(viewpoint_cam, gaussians, pipe, bg, override_color=gs_camera_z.repeat(1, 3))["render"][0]
-    if depth_grad_thresh > 0:
-        depth_grad_x, depth_grad_y = compute_gradient(depth_map[None, None])
-        depth_grad_mag = torch.sqrt(depth_grad_x ** 2 + depth_grad_y ** 2).squeeze()
-        depth_grad_weight = (depth_grad_mag < depth_grad_thresh).float()
-        if depth_grad_mask_dilation > 0:
-            mask_di = depth_grad_mask_dilation
-            depth_grad_weight = -1 * F.max_pool2d(-1 * depth_grad_weight[None, None, ...], mask_di * 2 + 1, stride=1, padding=mask_di).squeeze()
-
-    grid = generate_grid(
-        0.5 / depth_map.shape[-1], 1 - 0.5 / depth_map.shape[-1], depth_map.shape[-1],
-        0.5 / depth_map.shape[-2], 1 - 0.5 / depth_map.shape[-2], depth_map.shape[-2], depth_map.device
-    )
-    depth = depth_map.view(-1, 1)
-    # pixel to NDC
-    pos = 2 * grid - 1
-    # NDC to camera space
-    pos[:, 0:1] = (pos[:, 0:1] - viewpoint_cam.projection_matrix[2, 0]) * depth / viewpoint_cam.projection_matrix[0, 0]
-    pos[:, 1:2] = (pos[:, 1:2] - viewpoint_cam.projection_matrix[2, 1]) * depth / viewpoint_cam.projection_matrix[1, 1]
-    pos_world = torch.cat((pos, depth, torch.ones_like(depth)), dim=-1) @ viewpoint_cam.world_view_transform.inverse()
-    pos_world = pos_world[:, :3].permute(1, 0).view(1, 3, *depth_map.shape[-2:])
-    pad_pos = F.pad(pos_world, (dilation, ) * 4, mode='replicate')
-    di = dilation
-    di2x = dilation * 2
-    vec1 = pad_pos[:, :, di2x:, di2x:] - pad_pos[:, :, :-di2x, :-di2x]
-    vec2 = pad_pos[:, :, :-di2x, di2x:] - pad_pos[:, :, di2x:, :-di2x]
-    normal1 = F.normalize(torch.cross(vec1, vec2, dim=1), p=2, dim=1)[0]
-    vec1 = pad_pos[:, :, di:-di, di2x:] - pad_pos[:, :, di:-di, :-di2x]
-    vec2 = pad_pos[:, :, :-di2x, di:-di] - pad_pos[:, :, di2x:, di:-di]
-    normal2 = F.normalize(torch.cross(vec1, vec2, dim=1), p=2, dim=1)[0]
-    normal = F.normalize(normal1 + normal2, p=2, dim=0)
-    dir_pp = (viewpoint_cam.camera_center.view(1, 3, 1, 1) - pos_world)
-    dir_pp_normalized = F.normalize(dir_pp, p=2, dim=1).squeeze()
-    normal = normal * torch.sign((normal * dir_pp_normalized).sum(0, keepdim=True))
-
-    # normal_cam = (normal.flatten(1).T @ viewpoint_cam.world_view_transform[:3, :3]).T.view(3, *depth_map.shape[-2:])
-
-    gs_normal = gaussians.get_normal
-    dir_pp = (viewpoint_cam.camera_center.repeat(gaussians.get_features.shape[0], 1) - gaussians.get_xyz)
-    dir_pp_normalized = F.normalize(dir_pp, p=2, dim=1)
-    gs_normal = gs_normal * torch.sign((gs_normal * dir_pp_normalized).sum(1, keepdim=True))
-    pred_normal = render(viewpoint_cam, gaussians, pipe, bg, override_color=gs_normal)["render"]
-    pred_normal = F.normalize(pred_normal, p=2, dim=0)
-    # pred_normal_cam = (pred_normal.flatten(1).T @ viewpoint_cam.world_view_transform[:3, :3]).T.view(3, *depth_map.shape[-2:])
-
-    pred_normal_shift = (pred_normal + 1) / 2
-    normal_shift = (normal + 1) / 2
-
-    if depth_grad_thresh > 0:
-        normal_loss = (torch.abs(pred_normal_shift - normal_shift) * depth_grad_weight[None]).mean()
-    else:
-        normal_loss = torch.abs(pred_normal_shift - normal_shift).mean()
-
-    valid_indices = torch.nonzero(visibility_filter).squeeze()
-    pos2D = pos3D @ viewpoint_cam.projection_matrix
-    ndc_coords = pos2D[:, :2] / pos2D[:, 3:4]
-    gs_depthmap_z = F.grid_sample(depth_map[None, None], ndc_coords[valid_indices][None, None], align_corners=True).squeeze()
-    close_mask = (gs_depthmap_z - gs_camera_z[valid_indices, 0]).abs() < close_thresh
-    valid_indices = valid_indices[close_mask]
-
-    closest_indices = gaussians.knn_idx[valid_indices]
-    valid_normal = gs_normal[valid_indices]
-    valid_shift_normal = (valid_normal + 1) / 2
-    closest_normal = gs_normal[closest_indices]
-    closest_normal = closest_normal * torch.sign((closest_normal * valid_normal[:, None]).sum(dim=-1, keepdim=True)).detach()
-    closest_mean_shift_normal = (F.normalize(closest_normal.mean(1), p=2, dim=-1) + 1) / 2
-    smooth_loss = torch.abs(valid_shift_normal - closest_mean_shift_normal).mean()
-    return normal_loss + smooth_loss, normal
-
 
 
 def get_tv_loss(
@@ -253,8 +149,6 @@ def training(
     iter_start = torch.cuda.Event(enable_timing=True)
     iter_end = torch.cuda.Event(enable_timing=True)
 
-    all_cameras = scene.getTrainCameras().copy()
-
     # NOTE: prepare for PBR
     brdf_lut = get_brdf_lut().cuda()
     envmap_dirs = get_envmap_dirs()
@@ -327,9 +221,6 @@ def training(
             background = bg
         else:  # NOTE: black background for PBR
             background = torch.zeros_like(bg)
-
-        gt_image = viewpoint_cam.original_image.cuda(non_blocking=True)
-        alpha_mask = viewpoint_cam.gt_alpha_mask.cuda(non_blocking=True)
         rendering_result = render(
             viewpoint_camera=viewpoint_cam,
             pc=gaussians,
@@ -362,6 +253,7 @@ def training(
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
+        alpha_mask = viewpoint_cam.gt_alpha_mask.cuda()
         gt_image = (gt_image * alpha_mask + background[:, None, None] * (1.0 - alpha_mask)).clamp(0.0, 1.0)
         loss: torch.Tensor
         Ll1 = F.l1_loss(image, gt_image)
@@ -389,6 +281,7 @@ def training(
                 occlusion_flag = False
             # recon occlusion
             if indirect:
+                # print("begin to reconstruct occlusion")
                 points = (
                     (-view_dirs.reshape(-1, 3) * depth_map.reshape(-1, 1) + c2w[:3, 3])
                     .clamp(min=-bound, max=bound)
@@ -410,6 +303,7 @@ def training(
                     normals=normal_map.permute(1, 2, 0).reshape(-1, 3).contiguous(),
                 ).reshape(H, W, -1)
             else:
+                # print("skip occlusion reconstruction")
                 occlusion = torch.ones_like(roughness_map).permute(1, 2, 0)  # [H, W, 1]
                 irradiance = torch.zeros_like(roughness_map).permute(1, 2, 0)  # [H, W, 1]
 
@@ -507,6 +401,10 @@ def training(
                 irradiance_volumes=irradiance_volumes,
                 indirect=indirect,
             )
+            # NOTE: we same .pth instead of point cloud for additional irradiance volumes and cubemap
+            # if iteration in saving_iterations:
+            #    print(f"\n[ITER {iteration}] Saving Gaussians")
+            #    scene.save(iteration)
 
             # Densification
             if iteration < opt.densify_until_iter:
@@ -520,23 +418,10 @@ def training(
                     iteration > opt.densify_from_iter
                     and iteration % opt.densification_interval == 0
                 ):
-                    print("Densifying")
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(
                         opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold
                     )
-                    # Culling
-                    scene_mask, scene_center = culling(gaussians.get_xyz, scene.getTrainCameras())
-                    gaussians.densify_and_scale_split(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 100, opt.densify_scale_factor, scene_mask, N=3, no_grad=True)
-                    prune_mask = (gaussians.get_opacity < 0.005).squeeze()
-                    if size_threshold:
-                        print("Pruning big points")
-                        big_points_vs = gaussians.max_radii2D > size_threshold
-                        big_points_ws = gaussians.get_scaling.max(dim=1).values > 0.1 * scene.cameras_extent
-                        prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
-                    gaussians.prune_points(prune_mask)
-
-            # Opacity reset
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                     dataset.white_background and iteration == opt.densify_from_iter
@@ -552,6 +437,7 @@ def training(
                     light_optimizer.step()
                     light_optimizer.zero_grad(set_to_none=True)
                     cubemap.clamp_(min=0.0)
+
             if iteration in checkpoint_iterations:
                 print(f"\n[ITER {iteration}] Saving Checkpoint")
                 torch.save(

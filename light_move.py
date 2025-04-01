@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from diff_gaussian_rasterization import _C
 from arguments import GroupParams, ModelParams, PipelineParams, get_combined_args
-from gaussian_renderer import GaussianModel, render
+from gaussian_renderer import GaussianModel, render, FlattenGaussianModel
 from scene import Scene, Camera
 from utils.graphics_utils import getProjectionMatrix
 from utils.camera_utils import trajectory_from_c2ws
@@ -119,40 +119,40 @@ def light_pbr_shading(
     if background is None:
         background = torch.zeros_like(normals)  # [H, W, 3]
 
-    # preapre
+    # 计算光线方向
     light_dirs = F.normalize(light_position - points, p=2, dim=-1)  # [H, W, 3]
     half_dirs = (light_dirs + view_dirs) / 2.0  # [H, W, 3]
+
     distance = torch.norm(light_position - points, p=2, dim=-1, keepdim=True)  # [H, W, 1]
-    attenuation = 1.0 / torch.pow(distance, 2)  # [H, W, 1]
+    attenuation = 1.0 / (torch.pow(distance, 2) + 1e-4)  # [H, W, 1]
     radiance = light_intensity * attenuation  # [H, W, 3]
 
+    # 计算 F0
     if metallic is None:
-        F0 = torch.ones_like(albedo) * 0.04  # [H, W, 3]
+        F0 = torch.full_like(albedo, 0.04)  # [H, W, 3]
     else:
         F0 = (1.0 - metallic) * 0.04 + albedo * metallic  # [H, W, 3]
 
-    # Cook-Torrance BRDF
-    NoV = saturate_dot(normals, view_dirs)  # [H, W, 1]
-    NoL = saturate_dot(normals, light_dirs)  # [H, W, 1]
-    HoV = saturate_dot(half_dirs, view_dirs)  # [H, W, 1]
-    NDF = DistributionGGX(normals=normals, half_dirs=half_dirs, roughness=roughness)  # [H, W, 1]
-    G = GeometrySmith(normals=normals, view_dirs=view_dirs, light_dirs=light_dirs, roughness=roughness)  # [H, W, 1]
-    fresnel = fresnelSchlick(HoV=HoV, F0=F0)  # [H, W, 3]
+    # 计算 BRDF
+    NoV = F.relu(torch.sum(normals * view_dirs, dim=-1, keepdim=True))  # [H, W, 1]
+    NoL = F.relu(torch.sum(normals * light_dirs, dim=-1, keepdim=True))  # [H, W, 1]
+    HoV = F.relu(torch.sum(half_dirs * view_dirs, dim=-1, keepdim=True))  # [H, W, 1]
+    # NoL = torch.clamp(NoL, min=0.2)  # 限制最小值，避免过低的光照强度
+    NDF = DistributionGGX(normals, half_dirs, roughness)  # [H, W, 1]
+    G = GeometrySmith(normals, view_dirs, light_dirs, roughness)  # [H, W, 1]
+    fresnel = fresnelSchlick(HoV, F0)  # [H, W, 3]
 
-    numerator = NDF * G * fresnel  # [H, W, 3]
-    denominator = 4.0 * NoV * NoL + 1e-4  # [H, W, 1]
-    specular = numerator / denominator  # [H, W, 3]
+    denominator = torch.clamp(4.0 * NoV * NoL, min=1e-4)  # [H, W, 1]
+    specular = (NDF * G * fresnel) / denominator  # [H, W, 3]
 
-    kd = 1.0 - fresnel  # [H, W, 3]
-    if metallic is not None:
-        kd *= (1.0 - metallic)
-
+    kd = (1.0 - fresnel) * (1.0 - metallic) if metallic is not None else (1.0 - fresnel)
     render_rgb = (kd * albedo / np.pi + specular) * radiance * NoL
 
     render_rgb = torch.where(mask, render_rgb, background)
 
     if shadow is not None:
-        render_rgb = torch.where(shadow == 0.0, render_rgb, render_rgb * 0.2)
+        render_rgb *= (1.0 - shadow*0.9)  # 0.2~1.0 范围
+
 
     if linear:
         render_rgb = linear_to_srgb(render_rgb.squeeze())
@@ -342,7 +342,7 @@ def launch(
     end: int = -1,
     loop: bool = False,
 ) -> None:
-    gaussians = GaussianModel(dataset.sh_degree)
+    gaussians = FlattenGaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians, shuffle=False)
 
     checkpoint = torch.load(checkpoint)
@@ -432,7 +432,7 @@ def launch(
     light_intensity = torch.ones([3]).cuda() * 100.0
     envmap_dirs = get_envmap_dirs()  # [H, W, 3]
     for idx, c2w_inter in enumerate(tqdm(c2ws_inter, desc="Rendering progress")):
-        idx = 120
+        # idx = 120
         c2w_inter = c2ws_inter[idx]
         c2w_inter = torch.from_numpy(c2w_inter).cuda().float()
         light_position = c2w_inter[:3, 3]
@@ -444,7 +444,7 @@ def launch(
         depth_envmap = dr.texture(
             depth_cubemap[None, ...],
             envmap_dirs[None, ...].contiguous(),
-            filter_mode="linear",
+            filter_mode="auto",
             boundary_mode="cube",
         )[
             0
@@ -469,13 +469,20 @@ def launch(
         closest_depth = dr.texture(
             depth_cubemap[None, ...],
             query_dirs[None, ...].contiguous(),
-            filter_mode="linear",
+            filter_mode="auto",
             # filter_mode="nearest",
             boundary_mode="cube",
         )[
             0
         ]  # [H, W, 1]
-        threshold = 2e-1
+        threshold = 0.3
+        shadow =   (distance_to_light - threshold > closest_depth).float().permute(2, 0, 1)
+        blur_factor = 1.0 - torch.exp(-(distance_to_light - closest_depth) ** 2 / (2 * threshold ** 2))
+        # 对 blur_factor 进行非线性变换（加快边缘衰减）
+        blur_factor = blur_factor ** 2  # 平方变换，加快边缘衰减
+        # 归一化，保持整体模糊强度不变
+        blur_factor = blur_factor / blur_factor.max()
+        blur_factor = blur_factor.permute(2, 0, 1)
         shadow = (distance_to_light - threshold > closest_depth).float().permute(2, 0, 1)
         img = torch.cat([render_img, torch.tile(shadow, (3, 1, 1))], dim=2)
         torchvision.utils.save_image(img, os.path.join(pbr_path, f"{idx:05d}_shadow.png"))
@@ -494,7 +501,7 @@ def launch(
             albedo=albedo_map.permute(1, 2, 0),  # [H, W, 3]
             roughness=roughness_map.permute(1, 2, 0),  # [H, W, 1]
             metallic=metallic_map.permute(1, 2, 0) if metallic else None,  # [H, W, 1]
-            shadow = shadow.permute(1, 2, 0),  # [H, W, 1]
+            shadow = blur_factor.permute(1, 2, 0),  # [H, W, 1]
             linear=linear,
         )
         render_rgb = (

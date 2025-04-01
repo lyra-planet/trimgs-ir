@@ -729,300 +729,300 @@ class FlattenGaussianModel(GaussianModel):
         super().__init__(sh_degree)
         self.eps_s0 = 1e-8
         self.s0 = torch.empty(0)
-    # @property
-    # def get_scaling(self):
-    #     self.s0 = torch.ones_like(self._scaling[:, :1]) * self.eps_s0
-    #     return torch.cat((self.s0, self.scaling_activation(self._scaling[:, [-2, -1]])), dim=1)
-    # @property
-    # def get_normal(self):
-    #     R = build_rotation(self.get_rotation)
-    #     gs_normal = R[..., 0]
-    #     gs_normal = F.normalize(gs_normal, dim=1)
-    #     return gs_normal
+    @property
+    def get_scaling(self):
+        self.s0 = torch.ones_like(self._scaling[:, :1]) * self.eps_s0
+        return torch.cat((self.s0, self.scaling_activation(self._scaling[:, [-2, -1]])), dim=1)
+    @property
+    def get_normal(self):
+        R = build_rotation(self.get_rotation)
+        gs_normal = R[..., 0]
+        gs_normal = F.normalize(gs_normal, dim=1)
+        return gs_normal
 
-    # def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float) -> None:
-    #     self.spatial_lr_scale = spatial_lr_scale
-    #     fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
-    #     fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
-    #     features = (
-    #         torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-    #     )
-    #     features[:, :3, 0] = fused_color
-    #     features[:, 3:, 1:] = 0.0
+    def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float) -> None:
+        self.spatial_lr_scale = spatial_lr_scale
+        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
+        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        features = (
+            torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        )
+        features[:, :3, 0] = fused_color
+        features[:, 3:, 1:] = 0.0
 
-    #     print("Number of points at initialisation : ", fused_point_cloud.shape[0])
+        print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
-    #     dist2 = torch.clamp_min(
-    #         distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001
-    #     )
-    #     scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 2)  # 注意此处维度变化！
-    #     rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
-    #     rots[:, 0] = 1
+        dist2 = torch.clamp_min(
+            distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001
+        )
+        scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 2)  # 注意此处维度变化！
+        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
 
-    #     opacities = inverse_sigmoid(
-    #         0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
-    #     )
+        opacities = inverse_sigmoid(
+            0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
+        )
 
-    #     # normal = torch.ones((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
-    #     normal = torch.zeros((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
-    #     normal[..., 2] = 1.0
-    #     albedo = torch.ones((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
-    #     roughness = torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
-    #     metallic = torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
+        # normal = torch.ones((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
+        normal = torch.zeros((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
+        normal[..., 2] = 1.0
+        albedo = torch.ones((fused_point_cloud.shape[0], 3), dtype=torch.float, device="cuda")
+        roughness = torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
+        metallic = torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
 
-    #     self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
-    #     self._features_dc = nn.Parameter(
-    #         features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True)
-    #     )
-    #     self._features_rest = nn.Parameter(
-    #         features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True)
-    #     )
-    #     self._scaling = nn.Parameter(scales.requires_grad_(True))
-    #     self._rotation = nn.Parameter(rots.requires_grad_(True))
-    #     self._opacity = nn.Parameter(opacities.requires_grad_(True))
-    #     self._normal = nn.Parameter(normal.requires_grad_(True))
-    #     self._albedo = nn.Parameter(albedo.requires_grad_(True))
-    #     self._roughness = nn.Parameter(roughness.requires_grad_(True))
-    #     self._metallic = nn.Parameter(metallic.requires_grad_(True))
-    #     self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
+        self._features_dc = nn.Parameter(
+            features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True)
+        )
+        self._features_rest = nn.Parameter(
+            features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True)
+        )
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self._normal = nn.Parameter(normal.requires_grad_(True))
+        self._albedo = nn.Parameter(albedo.requires_grad_(True))
+        self._roughness = nn.Parameter(roughness.requires_grad_(True))
+        self._metallic = nn.Parameter(metallic.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    # def construct_list_of_attributes(self) -> List[str]:
-    #     l = ["x", "y", "z"]
-    #     # All channels except the 3 DC
-    #     for i in range(self._features_dc.shape[1] * self._features_dc.shape[2]):
-    #         l.append(f"f_dc_{i}")
-    #     for i in range(self._features_rest.shape[1] * self._features_rest.shape[2]):
-    #         l.append(f"f_rest_{i}")
-    #     l.append("opacity")
-    #     for i in range(self._normal.shape[1]):
-    #         l.append(f"normal_{i}")
-    #     for i in range(self._albedo.shape[1]):
-    #         l.append(f"albedo_{i}")
-    #     l.append("roughness")
-    #     l.append("metallic")
-    #     for i in range(self.get_scaling.shape[1]):
-    #         l.append(f"scale_{i}")
-    #     for i in range(self._rotation.shape[1]):
-    #         l.append(f"rot_{i}")
-    #     return l
+    def construct_list_of_attributes(self) -> List[str]:
+        l = ["x", "y", "z"]
+        # All channels except the 3 DC
+        for i in range(self._features_dc.shape[1] * self._features_dc.shape[2]):
+            l.append(f"f_dc_{i}")
+        for i in range(self._features_rest.shape[1] * self._features_rest.shape[2]):
+            l.append(f"f_rest_{i}")
+        l.append("opacity")
+        for i in range(self._normal.shape[1]):
+            l.append(f"normal_{i}")
+        for i in range(self._albedo.shape[1]):
+            l.append(f"albedo_{i}")
+        l.append("roughness")
+        l.append("metallic")
+        for i in range(self.get_scaling.shape[1]):
+            l.append(f"scale_{i}")
+        for i in range(self._rotation.shape[1]):
+            l.append(f"rot_{i}")
+        return l
 
-    # def save_ply(self, path: str) -> None:
-    #     mkdir_p(os.path.dirname(path))
+    def save_ply(self, path: str) -> None:
+        mkdir_p(os.path.dirname(path))
 
-    #     xyz = self._xyz.detach().cpu().numpy()
-    #     f_dc = (
-    #         self._features_dc.detach()
-    #         .transpose(1, 2)
-    #         .flatten(start_dim=1)
-    #         .contiguous()
-    #         .cpu()
-    #         .numpy()
-    #     )
-    #     f_rest = (
-    #         self._features_rest.detach()
-    #         .transpose(1, 2)
-    #         .flatten(start_dim=1)
-    #         .contiguous()
-    #         .cpu()
-    #         .numpy()
-    #     )
-    #     opacities = self._opacity.detach().cpu().numpy()
-    #     inverse_eps_s0 = self.scaling_inverse_activation(
-    #         torch.tensor(self.eps_s0, device=self._scaling.device)
-    #     )
-    #     _scaling = torch.cat(
-    #         (
-    #             torch.ones_like(self._scaling[:, :1]) * inverse_eps_s0,
-    #             self._scaling[:, [-2, -1]],
-    #         ),
-    #         dim=1,
-    #     )
-    #     scale = _scaling.detach().cpu().numpy()
-    #     normal = self._normal.detach().cpu().numpy()
-    #     albedo = self._albedo.detach().cpu().numpy()
-    #     roughness = self._roughness.detach().cpu().numpy()
-    #     metallic = self._metallic.detach().cpu().numpy()
+        xyz = self._xyz.detach().cpu().numpy()
+        f_dc = (
+            self._features_dc.detach()
+            .transpose(1, 2)
+            .flatten(start_dim=1)
+            .contiguous()
+            .cpu()
+            .numpy()
+        )
+        f_rest = (
+            self._features_rest.detach()
+            .transpose(1, 2)
+            .flatten(start_dim=1)
+            .contiguous()
+            .cpu()
+            .numpy()
+        )
+        opacities = self._opacity.detach().cpu().numpy()
+        inverse_eps_s0 = self.scaling_inverse_activation(
+            torch.tensor(self.eps_s0, device=self._scaling.device)
+        )
+        _scaling = torch.cat(
+            (
+                torch.ones_like(self._scaling[:, :1]) * inverse_eps_s0,
+                self._scaling[:, [-2, -1]],
+            ),
+            dim=1,
+        )
+        scale = _scaling.detach().cpu().numpy()
+        normal = self._normal.detach().cpu().numpy()
+        albedo = self._albedo.detach().cpu().numpy()
+        roughness = self._roughness.detach().cpu().numpy()
+        metallic = self._metallic.detach().cpu().numpy()
 
-    #     rotation = self._rotation.detach().cpu().numpy()
+        rotation = self._rotation.detach().cpu().numpy()
 
-    #     dtype_full = [(attribute, "f4") for attribute in self.construct_list_of_attributes()]
+        dtype_full = [(attribute, "f4") for attribute in self.construct_list_of_attributes()]
 
-    #     elements = np.empty(xyz.shape[0], dtype=dtype_full)
-    #     attributes = np.concatenate(
-    #         (
-    #             xyz,
-    #             f_dc,
-    #             f_rest,
-    #             opacities,
-    #             normal,
-    #             albedo,
-    #             roughness,
-    #             metallic,
-    #             scale,
-    #             rotation,
-    #         ),
-    #         axis=1,
-    #     )
-    #     elements[:] = list(map(tuple, attributes))
-    #     el = PlyElement.describe(elements, "vertex")
-    #     PlyData([el]).write(path)
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate(
+            (
+                xyz,
+                f_dc,
+                f_rest,
+                opacities,
+                normal,
+                albedo,
+                roughness,
+                metallic,
+                scale,
+                rotation,
+            ),
+            axis=1,
+        )
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, "vertex")
+        PlyData([el]).write(path)
 
 
-    # def load_ply(self, path: str,spatial_lr_scale=None) -> None:
-    #     plydata = PlyData.read(path)
+    def load_ply(self, path: str,spatial_lr_scale=None) -> None:
+        plydata = PlyData.read(path)
 
-    #     xyz = np.stack(
-    #         (
-    #             np.asarray(plydata.elements[0]["x"]),
-    #             np.asarray(plydata.elements[0]["y"]),
-    #             np.asarray(plydata.elements[0]["z"]),
-    #         ),
-    #         axis=1,
-    #     )
-    #     opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
-    #     normal = np.stack(
-    #         (
-    #             np.asarray(plydata.elements[0]["normal_0"]),
-    #             np.asarray(plydata.elements[0]["normal_1"]),
-    #             np.asarray(plydata.elements[0]["normal_2"]),
-    #         ),
-    #         axis=1,
-    #     )
-    #     albedo = np.stack(
-    #         (
-    #             np.asarray(plydata.elements[0]["albedo_0"]),
-    #             np.asarray(plydata.elements[0]["albedo_1"]),
-    #             np.asarray(plydata.elements[0]["albedo_2"]),
-    #         ),
-    #         axis=1,
-    #     )
-    #     roughness = np.asarray(plydata.elements[0]["roughness"])[..., np.newaxis]
-    #     metallic = np.asarray(plydata.elements[0]["metallic"])[..., np.newaxis]
+        xyz = np.stack(
+            (
+                np.asarray(plydata.elements[0]["x"]),
+                np.asarray(plydata.elements[0]["y"]),
+                np.asarray(plydata.elements[0]["z"]),
+            ),
+            axis=1,
+        )
+        opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+        normal = np.stack(
+            (
+                np.asarray(plydata.elements[0]["normal_0"]),
+                np.asarray(plydata.elements[0]["normal_1"]),
+                np.asarray(plydata.elements[0]["normal_2"]),
+            ),
+            axis=1,
+        )
+        albedo = np.stack(
+            (
+                np.asarray(plydata.elements[0]["albedo_0"]),
+                np.asarray(plydata.elements[0]["albedo_1"]),
+                np.asarray(plydata.elements[0]["albedo_2"]),
+            ),
+            axis=1,
+        )
+        roughness = np.asarray(plydata.elements[0]["roughness"])[..., np.newaxis]
+        metallic = np.asarray(plydata.elements[0]["metallic"])[..., np.newaxis]
 
-    #     features_dc = np.zeros((xyz.shape[0], 3, 1))
-    #     features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
-    #     features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
-    #     features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
+        features_dc = np.zeros((xyz.shape[0], 3, 1))
+        features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
+        features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
+        features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
 
-    #     extra_f_names = [
-    #         p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")
-    #     ]
-    #     extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split("_")[-1]))
-    #     assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
-    #     features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
-    #     for idx, attr_name in enumerate(extra_f_names):
-    #         features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-    #     # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
-    #     features_extra = features_extra.reshape(
-    #         (features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1)
-    #     )
+        extra_f_names = [
+            p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")
+        ]
+        extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split("_")[-1]))
+        assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+        for idx, attr_name in enumerate(extra_f_names):
+            features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
+        features_extra = features_extra.reshape(
+            (features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1)
+        )
 
-    #     scale_names = [
-    #         p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")
-    #     ]
-    #     scale_names = sorted(scale_names, key=lambda x: int(x.split("_")[-1]))
-    #     scales = np.zeros((xyz.shape[0], len(scale_names)))
-    #     for idx, attr_name in enumerate(scale_names):
-    #         scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        scale_names = [
+            p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")
+        ]
+        scale_names = sorted(scale_names, key=lambda x: int(x.split("_")[-1]))
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
+        for idx, attr_name in enumerate(scale_names):
+            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-    #     rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
-    #     rot_names = sorted(rot_names, key=lambda x: int(x.split("_")[-1]))
-    #     rots = np.zeros((xyz.shape[0], len(rot_names)))
-    #     for idx, attr_name in enumerate(rot_names):
-    #         rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
+        rot_names = sorted(rot_names, key=lambda x: int(x.split("_")[-1]))
+        rots = np.zeros((xyz.shape[0], len(rot_names)))
+        for idx, attr_name in enumerate(rot_names):
+            rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-    #     self._xyz = nn.Parameter(
-    #         torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._features_dc = nn.Parameter(
-    #         torch.tensor(features_dc, dtype=torch.float, device="cuda")
-    #         .transpose(1, 2)
-    #         .contiguous()
-    #         .requires_grad_(True)
-    #     )
-    #     self._features_rest = nn.Parameter(
-    #         torch.tensor(features_extra, dtype=torch.float, device="cuda")
-    #         .transpose(1, 2)
-    #         .contiguous()
-    #         .requires_grad_(True)
-    #     )
-    #     self._opacity = nn.Parameter(
-    #         torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._normal = nn.Parameter(
-    #         torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._albedo = nn.Parameter(
-    #         torch.tensor(albedo, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._roughness = nn.Parameter(
-    #         torch.tensor(roughness, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._metallic = nn.Parameter(
-    #         torch.tensor(metallic, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._scaling = nn.Parameter(
-    #         torch.tensor(scales[:, 1:], dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self._rotation = nn.Parameter(
-    #         torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True)
-    #     )
-    #     self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self._xyz = nn.Parameter(
+            torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._features_dc = nn.Parameter(
+            torch.tensor(features_dc, dtype=torch.float, device="cuda")
+            .transpose(1, 2)
+            .contiguous()
+            .requires_grad_(True)
+        )
+        self._features_rest = nn.Parameter(
+            torch.tensor(features_extra, dtype=torch.float, device="cuda")
+            .transpose(1, 2)
+            .contiguous()
+            .requires_grad_(True)
+        )
+        self._opacity = nn.Parameter(
+            torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._normal = nn.Parameter(
+            torch.tensor(normal, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._albedo = nn.Parameter(
+            torch.tensor(albedo, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._roughness = nn.Parameter(
+            torch.tensor(roughness, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._metallic = nn.Parameter(
+            torch.tensor(metallic, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._scaling = nn.Parameter(
+            torch.tensor(scales[:, 1:], dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._rotation = nn.Parameter(
+            torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    #     self.active_sh_degree = self.max_sh_degree
+        self.active_sh_degree = self.max_sh_degree
 
-    # def densify_and_split(
-    #     self,
-    #     grads: torch.Tensor,
-    #     grad_threshold: float,
-    #     scene_extent: float,
-    #     N: int = 2,
-    # ) -> None:
-    #     n_init_points = self.get_xyz.shape[0]
-    #     # Extract points that satisfy the gradient condition
-    #     padded_grad = torch.zeros((n_init_points), device="cuda")
-    #     padded_grad[: grads.shape[0]] = grads.squeeze()
-    #     selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
-    #     selected_pts_mask = torch.logical_and(
-    #         selected_pts_mask,
-    #         torch.max(self.get_scaling, dim=1).values > self.percent_dense * scene_extent,
-    #     )
+    def densify_and_split(
+        self,
+        grads: torch.Tensor,
+        grad_threshold: float,
+        scene_extent: float,
+        N: int = 2,
+    ) -> None:
+        n_init_points = self.get_xyz.shape[0]
+        # Extract points that satisfy the gradient condition
+        padded_grad = torch.zeros((n_init_points), device="cuda")
+        padded_grad[: grads.shape[0]] = grads.squeeze()
+        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(self.get_scaling, dim=1).values > self.percent_dense * scene_extent,
+        )
 
-    #     stds = self.get_scaling[selected_pts_mask].repeat(N, 1)
-    #     means = torch.zeros((stds.size(0), 3), device="cuda")
-    #     samples = torch.normal(mean=means, std=stds)
-    #     rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N, 1, 1)
-    #     new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[
-    #         selected_pts_mask
-    #     ].repeat(N, 1)
-    #     new_scaling = self.scaling_inverse_activation(
-    #     self.get_scaling[selected_pts_mask].repeat(N, 1) / (0.8 * N))[:, 1:]  # 关键改动
-    #     new_rotation = self._rotation[selected_pts_mask].repeat(N, 1)
-    #     new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
-    #     new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
-    #     new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
-    #     new_normal = self._normal[selected_pts_mask].repeat(N, 1)
-    #     new_albedo = self._albedo[selected_pts_mask].repeat(N, 1)
-    #     new_roughness = self._roughness[selected_pts_mask].repeat(N, 1)
-    #     new_metallic = self._metallic[selected_pts_mask].repeat(N, 1)
+        stds = self.get_scaling[selected_pts_mask].repeat(N, 1)
+        means = torch.zeros((stds.size(0), 3), device="cuda")
+        samples = torch.normal(mean=means, std=stds)
+        rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N, 1, 1)
+        new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[
+            selected_pts_mask
+        ].repeat(N, 1)
+        new_scaling = self.scaling_inverse_activation(
+        self.get_scaling[selected_pts_mask].repeat(N, 1) / (0.8 * N))[:, 1:]  # 关键改动
+        new_rotation = self._rotation[selected_pts_mask].repeat(N, 1)
+        new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
+        new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
+        new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
+        new_normal = self._normal[selected_pts_mask].repeat(N, 1)
+        new_albedo = self._albedo[selected_pts_mask].repeat(N, 1)
+        new_roughness = self._roughness[selected_pts_mask].repeat(N, 1)
+        new_metallic = self._metallic[selected_pts_mask].repeat(N, 1)
 
-    #     self.densification_postfix(
-    #         new_xyz,
-    #         new_features_dc,
-    #         new_features_rest,
-    #         new_opacity,
-    #         new_normal,
-    #         new_albedo,
-    #         new_roughness,
-    #         new_metallic,
-    #         new_scaling,
-    #         new_rotation,
-    #     )
+        self.densification_postfix(
+            new_xyz,
+            new_features_dc,
+            new_features_rest,
+            new_opacity,
+            new_normal,
+            new_albedo,
+            new_roughness,
+            new_metallic,
+            new_scaling,
+            new_rotation,
+        )
 
-    #     prune_filter = torch.cat(
-    #         (selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool))
-    #     )
-    #     self.prune_points(prune_filter)
+        prune_filter = torch.cat(
+            (selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool))
+        )
+        self.prune_points(prune_filter)
 
     #用不上
     def densify_and_scale_split(
@@ -1069,7 +1069,7 @@ class FlattenGaussianModel(GaussianModel):
         ].repeat(N, 1)
         new_scaling = self.scaling_inverse_activation(
             self.get_scaling[selected_pts_mask].repeat(N, 1) / (0.8 * N)
-        )
+        )[:, 1:]
         new_rotation = self._rotation[selected_pts_mask].repeat(N, 1)
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)

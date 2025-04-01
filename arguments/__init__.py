@@ -90,13 +90,64 @@ class OptimizationParams(ParamGroup):
         self.lambda_dssim = 0.2
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
-        self.densify_from_iter = 0
+        self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
 
         self.densify_scale_factor = 1.0
+
+
+
+        self.densify_scale_factor = 1.0
+        self.normal_regularity_from_iter = 0
+        self.normal_regularity_param = 0.5
+        self.normal_close_thresh = 1.0
+        self.neighbor_reset_interval = 500
+        self.normal_dilation = 2
+        self.depth_grad_thresh = 0.05
+        self.depth_grad_mask_dilation = 1
+        self.contribution_prune_from_iter = 1000
+        self.contribution_prune_interval = 500
+        self.contribution_prune_ratio = 0.1
+        self.knn_to_track = 16
         super().__init__(parser, "Optimization Parameters")
+
+
+class FinetuneParams(ParamGroup):
+    def __init__(self, parser):
+        self.iterations = 7_000
+        self.position_lr_init = 0.00016
+        self.position_lr_final = 0.0000016
+        self.position_lr_delay_mult = 0.01
+        self.position_lr_max_steps = 7_000
+        self.feature_lr = 0.0025
+        self.opacity_lr = 0.05
+        self.scaling_lr = 0.005
+        self.rotation_lr = 0.001
+        self.percent_dense = 0.01
+        self.lambda_dssim = 0.2
+        self.densification_interval = 100
+        self.opacity_reset_interval = 3000
+        self.densify_from_iter = 0 # default 500
+        self.densify_until_iter = 7_000
+        self.densify_grad_threshold = 0.0002
+        self.densify_scale_factor = 1.0
+        self.normal_regularity_from_iter = 0
+        self.normal_regularity_param = 0.5
+        self.normal_close_thresh = 1.0
+        self.neighbor_reset_interval = 500
+        self.normal_dilation = 2
+        self.random_background = False
+        self.depth_grad_thresh = 0.05
+        self.depth_grad_mask_dilation = 1
+        self.contribution_prune_from_iter = 1000
+        self.contribution_prune_interval = 500
+        self.contribution_prune_ratio = 0.1
+        self.knn_to_track = 16
+        super().__init__(parser, "Optimization Parameters")
+
+
 
 
 def get_combined_args(parser: ArgumentParser) -> Namespace:

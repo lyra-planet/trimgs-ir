@@ -20,7 +20,6 @@ from pbr import CubemapLight, get_brdf_lut, pbr_shading
 from scene import GaussianModel, Scene, Camera,FlattenGaussianModel
 from utils.general_utils import safe_state
 from utils.image_utils import psnr, turbo_cmap
-from utils.image_utils import psnr, blur, generate_grid, compute_gradient
 from utils.loss_utils import l1_loss, ssim
 
 try:
@@ -58,6 +57,25 @@ def culling(xyz, cams, expansion=2):
     # print(f'scene mask ratio {valid_mask.sum().item() / valid_mask.shape[0]}')
 
     return valid_mask, scene_center
+
+def prune_low_contribution_gaussians(gaussians, cameras, pipe, bg, K=5, prune_ratio=0.1):
+    top_list = [None, ] * K
+    for i, cam in enumerate(cameras):
+        trans = render(cam, gaussians, pipe, bg, record_transmittance=True)
+        if top_list[0] is not None:
+            m = trans > top_list[0]
+            if m.any():
+                for i in range(K - 1):
+                    top_list[K - 1 - i][m] = top_list[K - 2 - i][m]
+                top_list[0][m] = trans[m]
+        else:
+            top_list = [trans.clone() for _ in range(K)]
+
+    contribution = torch.stack(top_list, dim=-1).mean(-1)
+    tile = torch.quantile(contribution, prune_ratio)
+    prune_mask = contribution < tile
+    gaussians.prune_points(prune_mask)
+    torch.cuda.empty_cache()
 
 def normal_regularization(viewpoint_cam, gaussians, pipe, bg, visibility_filter, depth_grad_thresh=-1.0, close_thresh=1.0, dilation=2, depth_grad_mask_dilation=0):
     pos3D = gaussians.get_xyz
@@ -327,9 +345,6 @@ def training(
             background = bg
         else:  # NOTE: black background for PBR
             background = torch.zeros_like(bg)
-
-        gt_image = viewpoint_cam.original_image.cuda(non_blocking=True)
-        alpha_mask = viewpoint_cam.gt_alpha_mask.cuda(non_blocking=True)
         rendering_result = render(
             viewpoint_camera=viewpoint_cam,
             pc=gaussians,
@@ -362,6 +377,7 @@ def training(
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
+        alpha_mask = viewpoint_cam.gt_alpha_mask.cuda()
         gt_image = (gt_image * alpha_mask + background[:, None, None] * (1.0 - alpha_mask)).clamp(0.0, 1.0)
         loss: torch.Tensor
         Ll1 = F.l1_loss(image, gt_image)
@@ -508,6 +524,7 @@ def training(
                 indirect=indirect,
             )
 
+
             # Densification
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
@@ -522,10 +539,10 @@ def training(
                 ):
                     print("Densifying")
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+
                     gaussians.densify_and_prune(
                         opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold
                     )
-                    # Culling
                     scene_mask, scene_center = culling(gaussians.get_xyz, scene.getTrainCameras())
                     gaussians.densify_and_scale_split(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 100, opt.densify_scale_factor, scene_mask, N=3, no_grad=True)
                     prune_mask = (gaussians.get_opacity < 0.005).squeeze()
@@ -536,7 +553,11 @@ def training(
                         prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
                     gaussians.prune_points(prune_mask)
 
-            # Opacity reset
+                if iteration > opt.contribution_prune_from_iter and iteration % opt.contribution_prune_interval == 0:
+                        prune_low_contribution_gaussians(gaussians, all_cameras, pipe, background, K=5, prune_ratio=opt.contribution_prune_ratio)
+                        print(f'Num gs after contribution prune: {len(gaussians.get_xyz)}')
+                gaussians.reset_neighbor(opt.knn_to_track)
+            # Pr
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                     dataset.white_background and iteration == opt.densify_from_iter
@@ -552,6 +573,7 @@ def training(
                     light_optimizer.step()
                     light_optimizer.zero_grad(set_to_none=True)
                     cubemap.clamp_(min=0.0)
+
             if iteration in checkpoint_iterations:
                 print(f"\n[ITER {iteration}] Saving Checkpoint")
                 torch.save(
